@@ -18,6 +18,58 @@ CreateFileWFn g_create_file_w = nullptr;
 CreateFileAFn g_create_file_a = nullptr;
 HANDLE g_log = INVALID_HANDLE_VALUE;
 
+struct ButtonClickContext {
+    DWORD pid;
+    int control_id;
+    bool clicked;
+};
+
+BOOL CALLBACK ClickChild(HWND window, LPARAM value) {
+    auto *context = reinterpret_cast<ButtonClickContext *>(value);
+    if (GetDlgCtrlID(window) == context->control_id) {
+        SendMessageW(window, BM_CLICK, 0, 0);
+        context->clicked = true;
+        return FALSE;
+    }
+    return TRUE;
+}
+
+BOOL CALLBACK ClickProcessButton(HWND window, LPARAM value) {
+    auto *context = reinterpret_cast<ButtonClickContext *>(value);
+    DWORD pid = 0;
+    GetWindowThreadProcessId(window, &pid);
+    if (pid != context->pid) return TRUE;
+    EnumChildWindows(window, ClickChild, value);
+    if (!context->clicked) {
+        PostMessageW(window, WM_COMMAND, MAKEWPARAM(context->control_id, BN_CLICKED), 0);
+        context->clicked = true;
+    }
+    return FALSE;
+}
+
+void ClickRecordingButton(int control_id) {
+    ButtonClickContext context{GetCurrentProcessId(), control_id, false};
+    EnumWindows(ClickProcessButton, reinterpret_cast<LPARAM>(&context));
+}
+
+DWORD WINAPI ControlLoop(LPVOID) {
+    wchar_t temp_path[MAX_PATH]{};
+	wchar_t start_path[MAX_PATH]{};
+	wchar_t stop_path[MAX_PATH]{};
+	if (GetTempPathW(MAX_PATH, temp_path) == 0) return 1;
+	_snwprintf_s(start_path, MAX_PATH, _TRUNCATE,
+	             L"%sc875-record-start-%lu.cmd", temp_path, GetCurrentProcessId());
+	_snwprintf_s(stop_path, MAX_PATH, _TRUNCATE,
+	             L"%sc875-record-stop-%lu.cmd", temp_path, GetCurrentProcessId());
+	for (;;) {
+		if (GetFileAttributesW(start_path) != INVALID_FILE_ATTRIBUTES && DeleteFileW(start_path))
+			ClickRecordingButton(0x50bd);
+		if (GetFileAttributesW(stop_path) != INVALID_FILE_ATTRIBUTES && DeleteFileW(stop_path))
+			ClickRecordingButton(0x50c1);
+		Sleep(200);
+	}
+}
+
 bool IsTsWrite(LPCWSTR path, DWORD desired_access) {
     if (path == nullptr || (desired_access & (GENERIC_WRITE | FILE_APPEND_DATA)) == 0) {
         return false;
@@ -158,6 +210,8 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
         DisableThreadLibraryCalls(instance);
         HANDLE thread = CreateThread(nullptr, 0, InstallHooks, nullptr, 0, nullptr);
         if (thread != nullptr) CloseHandle(thread);
+        HANDLE control = CreateThread(nullptr, 0, ControlLoop, nullptr, 0, nullptr);
+        if (control != nullptr) CloseHandle(control);
     }
     return TRUE;
 }

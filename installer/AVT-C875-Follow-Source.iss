@@ -1,5 +1,5 @@
 #define MyAppName "AVT-C875 Follow Source"
-#define MyAppVersion "0.2.0-alpha"
+#define MyAppVersion "0.3.0-alpha"
 #define MyAppPublisher "YurKLYK"
 
 [Setup]

@@ -19,6 +19,10 @@ namespace {
 constexpr const char *kDirectory = "capture_directory";
 constexpr const char *kLatency = "target_latency_ms";
 constexpr const char *kHardwareDecode = "hw_decode";
+constexpr const char *kAutoLaunch = "auto_launch_recentral";
+constexpr const char *kAutoRecord = "auto_record_recentral";
+constexpr const char *kDeleteTs = "delete_session_ts";
+constexpr const char *kRecentralPath = "recentral_path";
 
 struct FollowSource {
 	obs_source_t *source = nullptr;
@@ -31,6 +35,19 @@ struct FollowSource {
 	bool injector_elevated = false;
 	bool injection_finished = false;
 	float injector_scan_elapsed = 2.0f;
+	float file_scan_elapsed = 1.0f;
+	std::string directory;
+	std::wstring recentral_path;
+	bool hardware_decode = true;
+	bool auto_launch = true;
+	bool auto_record = true;
+	bool delete_session_ts = false;
+	bool launched_by_plugin = false;
+	bool recording_started_by_plugin = false;
+	bool record_command_sent = false;
+	float runtime_elapsed = 0.0f;
+	std::string file_before_recording;
+	std::string session_file;
 };
 
 const char *source_name(void *)
@@ -60,25 +77,94 @@ std::string wide_to_utf8(const std::wstring &text)
 	return result;
 }
 
+std::string newest_ts(const char *directory);
+
 DWORD find_recentral_process()
 {
 	HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
 	if (snapshot == INVALID_HANDLE_VALUE)
 		return 0;
 	DWORD pid = 0;
+	DWORD backend_pid = 0;
 	PROCESSENTRY32W entry{};
 	entry.dwSize = sizeof(entry);
 	if (Process32FirstW(snapshot, &entry)) {
 		do {
-			if (_wcsicmp(entry.szExeFile, L"RECentral.exe") == 0 ||
-			    _wcsicmp(entry.szExeFile, L"AVerRECentral.exe") == 0) {
+			if (_wcsicmp(entry.szExeFile, L"RECentral.exe") == 0) {
 				pid = entry.th32ProcessID;
+				break;
+			}
+			if (_wcsicmp(entry.szExeFile, L"AVerRECentral.exe") == 0)
+				backend_pid = entry.th32ProcessID;
+		} while (Process32NextW(snapshot, &entry));
+	}
+	CloseHandle(snapshot);
+	return pid ? pid : backend_pid;
+}
+
+bool is_recentral_ui_running()
+{
+	HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+	if (snapshot == INVALID_HANDLE_VALUE)
+		return false;
+	bool found = false;
+	PROCESSENTRY32W entry{};
+	entry.dwSize = sizeof(entry);
+	if (Process32FirstW(snapshot, &entry)) {
+		do {
+			if (_wcsicmp(entry.szExeFile, L"RECentral.exe") == 0) {
+				found = true;
 				break;
 			}
 		} while (Process32NextW(snapshot, &entry));
 	}
 	CloseHandle(snapshot);
-	return pid;
+	return found;
+}
+
+bool launch_recentral(FollowSource *context)
+{
+	if (!context->auto_launch || context->recentral_path.empty() || is_recentral_ui_running())
+		return false;
+	SHELLEXECUTEINFOW execute{};
+	execute.cbSize = sizeof(execute);
+	execute.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC;
+	execute.lpFile = context->recentral_path.c_str();
+	execute.nShow = SW_SHOWNORMAL;
+	if (!ShellExecuteExW(&execute)) {
+		blog(LOG_ERROR, "[c875-follow] Failed to launch RECentral (error=%lu)", GetLastError());
+		return false;
+	}
+	if (execute.hProcess)
+		CloseHandle(execute.hProcess);
+	context->launched_by_plugin = true;
+	blog(LOG_INFO, "[c875-follow] RECentral launched automatically");
+	return true;
+}
+
+bool send_record_command(DWORD pid, bool start)
+{
+	wchar_t temp_path[MAX_PATH]{};
+	wchar_t command_path[MAX_PATH]{};
+	if (!pid || GetTempPathW(MAX_PATH, temp_path) == 0)
+		return false;
+	_snwprintf_s(command_path, MAX_PATH, _TRUNCATE, start ? L"%sc875-record-start-%lu.cmd" :
+			 L"%sc875-record-stop-%lu.cmd", temp_path, pid);
+	HANDLE command = CreateFileW(command_path, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr,
+				     CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY, nullptr);
+	if (command == INVALID_HANDLE_VALUE)
+		return false;
+	CloseHandle(command);
+	return true;
+}
+
+BOOL CALLBACK close_recentral_window(HWND window, LPARAM value)
+{
+	DWORD pid = 0;
+	GetWindowThreadProcessId(window, &pid);
+	if (pid == static_cast<DWORD>(value))
+		PostMessageW(window, WM_CLOSE, 0, 0);
+	return TRUE;
 }
 
 bool start_injector(FollowSource *context, bool elevated)
@@ -199,38 +285,49 @@ void release_media(FollowSource *context)
 	context->media = nullptr;
 }
 
-void update(void *data, obs_data_t *settings)
+void open_media(FollowSource *context, const std::string &file)
 {
-	auto *context = static_cast<FollowSource *>(data);
-	const char *directory = obs_data_get_string(settings, kDirectory);
-	context->target_latency_ms = obs_data_get_int(settings, kLatency);
-	context->file = newest_ts(directory);
-	context->initial_seek_done = false;
-
-	release_media(context);
-	if (context->file.empty()) {
-		blog(LOG_WARNING, "[c875-follow] No TS recording found in '%s'", directory);
+	if (file.empty() || file == context->file)
 		return;
-	}
-
+	release_media(context);
+	context->file = file;
+	context->initial_seek_done = false;
 	obs_data_t *media_settings = obs_data_create();
 	obs_data_set_string(media_settings, "local_file", context->file.c_str());
 	obs_data_set_bool(media_settings, "is_local_file", true);
 	obs_data_set_bool(media_settings, "looping", false);
 	obs_data_set_bool(media_settings, "restart_on_activate", false);
 	obs_data_set_bool(media_settings, "close_when_inactive", false);
-	obs_data_set_bool(media_settings, "hw_decode", obs_data_get_bool(settings, kHardwareDecode));
-
+	obs_data_set_bool(media_settings, "hw_decode", context->hardware_decode);
 	context->media = obs_source_create_private("ffmpeg_source", "C875 Follow Media", media_settings);
 	obs_data_release(media_settings);
 	if (!context->media) {
 		blog(LOG_ERROR, "[c875-follow] Failed to create ffmpeg_source for '%s'", context->file.c_str());
 		return;
 	}
-
 	obs_source_add_active_child(context->source, context->media);
 	blog(LOG_INFO, "[c875-follow] Following '%s' with target latency %lld ms", context->file.c_str(),
 	     static_cast<long long>(context->target_latency_ms));
+}
+
+void update(void *data, obs_data_t *settings)
+{
+	auto *context = static_cast<FollowSource *>(data);
+	const char *directory = obs_data_get_string(settings, kDirectory);
+	context->directory = directory ? directory : "";
+	context->target_latency_ms = obs_data_get_int(settings, kLatency);
+	context->hardware_decode = obs_data_get_bool(settings, kHardwareDecode);
+	context->auto_launch = obs_data_get_bool(settings, kAutoLaunch);
+	context->auto_record = obs_data_get_bool(settings, kAutoRecord);
+	context->delete_session_ts = obs_data_get_bool(settings, kDeleteTs);
+	context->recentral_path = utf8_to_wide(obs_data_get_string(settings, kRecentralPath));
+	const std::string selected = newest_ts(directory);
+	if (selected.empty()) {
+		blog(LOG_WARNING, "[c875-follow] No TS recording found in '%s'", directory);
+	} else {
+		open_media(context, selected);
+	}
+	launch_recentral(context);
 }
 
 void *create(obs_data_t *settings, obs_source_t *source)
@@ -244,16 +341,58 @@ void *create(obs_data_t *settings, obs_source_t *source)
 void destroy(void *data)
 {
 	auto *context = static_cast<FollowSource *>(data);
+	release_media(context);
+	if (context->recording_started_by_plugin) {
+		send_record_command(context->recentral_pid, false);
+		blog(LOG_INFO, "[c875-follow] Sent RECentral stop-recording command");
+		Sleep(1500);
+	}
+	if (context->delete_session_ts && !context->session_file.empty()) {
+		const std::wstring path = utf8_to_wide(context->session_file.c_str());
+		bool removed = false;
+		for (int attempt = 0; attempt < 20 && !removed; ++attempt) {
+			removed = DeleteFileW(path.c_str()) != FALSE;
+			if (!removed)
+				Sleep(250);
+		}
+		blog(removed ? LOG_INFO : LOG_WARNING, "[c875-follow] Session TS deletion %s: '%s'",
+		     removed ? "completed" : "failed", context->session_file.c_str());
+	}
+	if (context->launched_by_plugin && context->recentral_pid)
+		EnumWindows(close_recentral_window, static_cast<LPARAM>(context->recentral_pid));
 	if (context->injector_process)
 		CloseHandle(context->injector_process);
-	release_media(context);
 	delete context;
 }
 
 void video_tick(void *data, float seconds)
 {
 	auto *context = static_cast<FollowSource *>(data);
+	context->runtime_elapsed += seconds;
+	if (!context->recentral_pid)
+		launch_recentral(context);
 	update_injector(context, seconds);
+	if (context->auto_record && context->launched_by_plugin && context->injection_finished &&
+	    !context->record_command_sent && context->runtime_elapsed >= 10.0f) {
+		context->file_before_recording = newest_ts(context->directory.c_str());
+		if (!send_record_command(context->recentral_pid, true)) {
+			blog(LOG_ERROR, "[c875-follow] Failed to send recording command to RECentral");
+			return;
+		}
+		context->record_command_sent = true;
+		context->recording_started_by_plugin = true;
+		blog(LOG_INFO, "[c875-follow] Sent RECentral recording command after startup wait");
+	}
+	context->file_scan_elapsed += seconds;
+	if (context->file_scan_elapsed >= 1.0f) {
+		context->file_scan_elapsed = 0.0f;
+		const std::string latest = newest_ts(context->directory.c_str());
+		if (!latest.empty() && latest != context->file) {
+			if (context->record_command_sent && latest != context->file_before_recording)
+				context->session_file = latest;
+			open_media(context, latest);
+		}
+	}
 	if (!context->media || context->initial_seek_done)
 		return;
 
@@ -321,6 +460,11 @@ void defaults(obs_data_t *settings)
 	obs_data_set_default_string(settings, kDirectory, directory.c_str());
 	obs_data_set_default_int(settings, kLatency, 5000);
 	obs_data_set_default_bool(settings, kHardwareDecode, true);
+	obs_data_set_default_bool(settings, kAutoLaunch, true);
+	obs_data_set_default_bool(settings, kAutoRecord, true);
+	obs_data_set_default_bool(settings, kDeleteTs, false);
+	obs_data_set_default_string(settings, kRecentralPath,
+				    "C:\\Program Files (x86)\\AVerMedia\\AVerMedia RECentral\\RECentral.exe");
 }
 
 obs_properties_t *properties(void *)
@@ -330,6 +474,11 @@ obs_properties_t *properties(void *)
 				nullptr);
 	obs_properties_add_int_slider(props, kLatency, obs_module_text("TargetLatency"), 2000, 15000, 500);
 	obs_properties_add_bool(props, kHardwareDecode, obs_module_text("HardwareDecode"));
+	obs_properties_add_bool(props, kAutoLaunch, obs_module_text("AutoLaunchRECentral"));
+	obs_properties_add_bool(props, kAutoRecord, obs_module_text("AutoRecordRECentral"));
+	obs_properties_add_bool(props, kDeleteTs, obs_module_text("DeleteSessionTs"));
+	obs_properties_add_path(props, kRecentralPath, obs_module_text("RECentralPath"), OBS_PATH_FILE,
+				"Executables (*.exe)", nullptr);
 	return props;
 }
 

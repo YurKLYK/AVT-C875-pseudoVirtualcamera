@@ -32,7 +32,7 @@ cl /nologo /O2 /W4 /EHsc /MT /DUNICODE /D_UNICODE /I"%ROOT%.deps\minhook\include
   "%ROOT%.deps\minhook\src\hook.c" ^
   "%ROOT%.deps\minhook\src\trampoline.c" ^
   "%ROOT%.deps\minhook\src\hde\hde32.c" ^
-  /link /MACHINE:X86 /OUT:"%ROOT%build\recentral_share_hook.dll"
+  /link /MACHINE:X86 user32.lib /OUT:"%ROOT%build\recentral_share_hook.dll"
 if errorlevel 1 exit /b 1
 
 cl /nologo /O2 /W4 /EHsc /MT /DUNICODE /D_UNICODE ^
@@ -47,4 +47,3 @@ if errorlevel 1 exit /b 1
 
 echo.
 echo Build completed: %ROOT%build
-
