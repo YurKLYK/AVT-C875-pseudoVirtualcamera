@@ -1,0 +1,9 @@
+src/obs-plugin/build_x64/
+src/obs-plugin/release/
+src/obs-plugin/.deps/
+src/recentral-share-hook/build/
+src/recentral-share-hook/.deps/
+installer/output/
+*.user
+*.suo
+
