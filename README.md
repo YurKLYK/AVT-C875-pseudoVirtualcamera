@@ -34,8 +34,11 @@ C875のLGP Stream EngineをOBSから直接利用せず、C875のハードウェ�
 
 ## インストール
 
-Releasesから最新の`AVT-C875-Follow-Source-Setup.exe`をダウンロードし、OBSと
+まずは[Windowsインストーラー](release/AVT-C875-Follow-Source-Setup.exe)をダウンロードし、OBSと
 RECentralを終了した状態で実行します。管理者権限が必要です。
+
+インストーラーを使わない場合は[手動インストール用ZIP](release/AVT-C875-Follow-Source-manual.zip)も
+利用できます。
 
 インストーラーは次を配置します。
 
@@ -123,4 +126,3 @@ OBSプラグインの初回構成では、OBSソースとビルド依存関係�
 
 このプロジェクトはGPL-2.0で配布します。MinHookなどの依存関係については
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)を参照してください。
-
