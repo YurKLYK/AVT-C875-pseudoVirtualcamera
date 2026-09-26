@@ -34,6 +34,22 @@ std::vector<DWORD> FindTargets() {
 }
 
 bool Inject(DWORD pid, const std::wstring &dll_path) {
+	HANDLE module_snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
+	if (module_snapshot != INVALID_HANDLE_VALUE) {
+		MODULEENTRY32W module{};
+		module.dwSize = sizeof(module);
+		if (Module32FirstW(module_snapshot, &module)) {
+			do {
+				if (_wcsicmp(module.szExePath, dll_path.c_str()) == 0) {
+					CloseHandle(module_snapshot);
+					std::wcout << L"[OK] PID " << pid << L": hook DLL already loaded\n";
+					return true;
+				}
+			} while (Module32NextW(module_snapshot, &module));
+		}
+		CloseHandle(module_snapshot);
+	}
+
     constexpr DWORD access = PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION |
                              PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ;
     HANDLE process = OpenProcess(access, FALSE, pid);
@@ -124,4 +140,3 @@ int wmain(int argc, wchar_t **argv) {
     }
     return 3;
 }
-

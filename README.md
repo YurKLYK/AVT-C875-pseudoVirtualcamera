@@ -48,22 +48,26 @@ RECentralを終了した状態で実行します。管理者権限が必要で�
 
 ## 使い方
 
-### 1. RECentralを起動する
+### 1. OBSとRECentralを起動する
 
-RECentralを起動します。この時点ではまだ録画を開始しません。
+OBSで`C875 録画追従ソース`を追加してからRECentralを起動します。順番が逆でも、ソースが
+RECentralを自動検出します。この時点ではまだ録画を開始しません。
 
-### 2. 読み取り共有フックを適用する
+### 2. 自動共有解除を確認する
 
-スタートメニューから`Enable RECentral TS sharing`を実行し、UACを許可します。
+プラグインがRECentralを検出すると、録画TSを別プロセスから読めるように共有フックを
+自動適用します。通常は操作不要です。権限不足の場合だけUACが表示されるため、`はい`を
+選択してください。
 
-管理者コンソールに次のような表示があれば成功です。
+OBSログに次の表示があれば成功です。
 
 ```text
-[OK] PID 1234: hook DLL loaded
+[c875-follow] RECentral recording sharing was unlocked automatically
 ```
 
 この処理は、RECentralが書き込み目的で開く`.ts`だけに`FILE_SHARE_READ`を追加します。
-RECentralを終了するとフックも消えるため、RECentralを再起動した場合は再実行してください。
+RECentralを再起動した場合も、新しいプロセスを検出して自動的に再適用します。
+うまくいかない場合に限り、スタートメニューの`Enable RECentral TS sharing`を手動実行できます。
 
 ### 3. RECentralでTS録画を開始する
 
@@ -94,7 +98,7 @@ OBSの音声ミキサーに`C875 録画追従ソース`が表示されること�
 
 ## 現在の制限
 
-- RECentral起動後、録画前に共有フックを手動実行する必要があります。
+- Windowsの権限状態によっては自動共有解除時にUAC確認が表示されます。
 - ソース作成後に新しいTSへ切り替わった場合の自動切り替えは未実装です。
 - 長時間動作時のLive Edge再同期は未実装です。
 - 現在はWindows 10/11・OBS 64bit専用です。

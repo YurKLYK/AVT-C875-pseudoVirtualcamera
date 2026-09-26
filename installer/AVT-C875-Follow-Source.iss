@@ -1,5 +1,5 @@
 #define MyAppName "AVT-C875 Follow Source"
-#define MyAppVersion "0.1.0-alpha"
+#define MyAppVersion "0.2.0-alpha"
 #define MyAppPublisher "YurKLYK"
 
 [Setup]
@@ -25,6 +25,8 @@ LicenseFile=..\LICENSE
 [Files]
 Source: "..\dist\obs-plugin\bin\64bit\c875-follow-source.dll"; DestDir: "{commonappdata}\obs-studio\plugins\c875-follow-source\bin\64bit"; Flags: ignoreversion
 Source: "..\dist\obs-plugin\data\locale\*.ini"; DestDir: "{commonappdata}\obs-studio\plugins\c875-follow-source\data\locale"; Flags: ignoreversion
+Source: "..\dist\hook\recentral_share_hook.dll"; DestDir: "{commonappdata}\obs-studio\plugins\c875-follow-source\data"; Flags: ignoreversion
+Source: "..\dist\hook\recentral_share_injector.exe"; DestDir: "{commonappdata}\obs-studio\plugins\c875-follow-source\data"; Flags: ignoreversion
 Source: "..\dist\hook\recentral_share_hook.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\hook\recentral_share_injector.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "Enable-RECentral-TS-Sharing.cmd"; DestDir: "{app}"; Flags: ignoreversion
@@ -40,4 +42,3 @@ Name: "{group}\Uninstall AVT-C875 Follow Source"; Filename: "{uninstallexe}"
 
 [Run]
 Filename: "{app}\README.md"; Description: "READMEを開く"; Flags: postinstall shellexec skipifsilent unchecked
-

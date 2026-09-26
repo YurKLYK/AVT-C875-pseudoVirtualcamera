@@ -6,4 +6,4 @@ src/recentral-share-hook/.deps/
 installer/output/
 *.user
 *.suo
-
+src/recentral-share-hook/*.obj

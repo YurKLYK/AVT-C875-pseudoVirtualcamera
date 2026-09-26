@@ -27,5 +27,5 @@ jobs:
           name: AVT-C875-Follow-Source-Windows
           path: |
             installer/output/AVT-C875-Follow-Source-Setup.exe
+            installer/output/AVT-C875-Follow-Source-manual.zip
             dist/
-

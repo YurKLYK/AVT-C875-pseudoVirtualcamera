@@ -1,5 +1,7 @@
 #include <obs-module.h>
 #include <windows.h>
+#include <shellapi.h>
+#include <tlhelp32.h>
 #include <media-io/audio-io.h>
 
 #include <cstdlib>
@@ -24,6 +26,11 @@ struct FollowSource {
 	std::string file;
 	int64_t target_latency_ms = 5000;
 	bool initial_seek_done = false;
+	DWORD recentral_pid = 0;
+	HANDLE injector_process = nullptr;
+	bool injector_elevated = false;
+	bool injection_finished = false;
+	float injector_scan_elapsed = 2.0f;
 };
 
 const char *source_name(void *)
@@ -51,6 +58,109 @@ std::string wide_to_utf8(const std::wstring &text)
 	WideCharToMultiByte(CP_UTF8, 0, text.c_str(), -1, result.data(), size, nullptr, nullptr);
 	result.pop_back();
 	return result;
+}
+
+DWORD find_recentral_process()
+{
+	HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+	if (snapshot == INVALID_HANDLE_VALUE)
+		return 0;
+	DWORD pid = 0;
+	PROCESSENTRY32W entry{};
+	entry.dwSize = sizeof(entry);
+	if (Process32FirstW(snapshot, &entry)) {
+		do {
+			if (_wcsicmp(entry.szExeFile, L"RECentral.exe") == 0 ||
+			    _wcsicmp(entry.szExeFile, L"AVerRECentral.exe") == 0) {
+				pid = entry.th32ProcessID;
+				break;
+			}
+		} while (Process32NextW(snapshot, &entry));
+	}
+	CloseHandle(snapshot);
+	return pid;
+}
+
+bool start_injector(FollowSource *context, bool elevated)
+{
+	char *injector_utf8 = obs_module_file("recentral_share_injector.exe");
+	char *hook_utf8 = obs_module_file("recentral_share_hook.dll");
+	if (!injector_utf8 || !hook_utf8) {
+		blog(LOG_ERROR, "[c875-follow] Injector files are not installed");
+		bfree(injector_utf8);
+		bfree(hook_utf8);
+		return false;
+	}
+	const std::wstring injector = utf8_to_wide(injector_utf8);
+	const std::wstring hook = utf8_to_wide(hook_utf8);
+	bfree(injector_utf8);
+	bfree(hook_utf8);
+	if (GetFileAttributesW(injector.c_str()) == INVALID_FILE_ATTRIBUTES ||
+	    GetFileAttributesW(hook.c_str()) == INVALID_FILE_ATTRIBUTES) {
+		blog(LOG_ERROR, "[c875-follow] Injector executable or hook DLL is missing");
+		return false;
+	}
+
+	std::wstring parameters = L"\"" + hook + L"\"";
+	SHELLEXECUTEINFOW execute{};
+	execute.cbSize = sizeof(execute);
+	execute.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC;
+	execute.lpVerb = elevated ? L"runas" : L"open";
+	execute.lpFile = injector.c_str();
+	execute.lpParameters = parameters.c_str();
+	execute.nShow = SW_HIDE;
+	if (!ShellExecuteExW(&execute) || !execute.hProcess) {
+		blog(LOG_WARNING, "[c875-follow] Could not start injector (elevated=%d, error=%lu)", elevated,
+		     GetLastError());
+		return false;
+	}
+	context->injector_process = execute.hProcess;
+	context->injector_elevated = elevated;
+	blog(LOG_INFO, "[c875-follow] Started automatic sharing unlock for RECentral PID %lu (elevated=%d)",
+	     context->recentral_pid, elevated);
+	return true;
+}
+
+void update_injector(FollowSource *context, float seconds)
+{
+	context->injector_scan_elapsed += seconds;
+	if (context->injector_scan_elapsed < 2.0f)
+		return;
+	context->injector_scan_elapsed = 0.0f;
+
+	const DWORD pid = find_recentral_process();
+	if (pid != context->recentral_pid) {
+		if (context->injector_process) {
+			CloseHandle(context->injector_process);
+			context->injector_process = nullptr;
+		}
+		context->recentral_pid = pid;
+		context->injector_elevated = false;
+		context->injection_finished = false;
+		if (pid)
+			start_injector(context, false);
+		return;
+	}
+	if (!pid || context->injection_finished || !context->injector_process)
+		return;
+
+	DWORD exit_code = STILL_ACTIVE;
+	if (!GetExitCodeProcess(context->injector_process, &exit_code) || exit_code == STILL_ACTIVE)
+		return;
+	CloseHandle(context->injector_process);
+	context->injector_process = nullptr;
+	if (exit_code == 0) {
+		context->injection_finished = true;
+		blog(LOG_INFO, "[c875-follow] RECentral recording sharing was unlocked automatically");
+	} else if (!context->injector_elevated) {
+		blog(LOG_INFO, "[c875-follow] Normal injection failed (exit=%lu); requesting administrator access",
+		     exit_code);
+		if (!start_injector(context, true))
+			context->injection_finished = true;
+	} else {
+		context->injection_finished = true;
+		blog(LOG_ERROR, "[c875-follow] Automatic sharing unlock failed (exit=%lu)", exit_code);
+	}
 }
 
 std::string newest_ts(const char *directory)
@@ -134,13 +244,16 @@ void *create(obs_data_t *settings, obs_source_t *source)
 void destroy(void *data)
 {
 	auto *context = static_cast<FollowSource *>(data);
+	if (context->injector_process)
+		CloseHandle(context->injector_process);
 	release_media(context);
 	delete context;
 }
 
-void video_tick(void *data, float)
+void video_tick(void *data, float seconds)
 {
 	auto *context = static_cast<FollowSource *>(data);
+	update_injector(context, seconds);
 	if (!context->media || context->initial_seek_done)
 		return;
 

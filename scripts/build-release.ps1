@@ -41,4 +41,23 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Installer build failed.' }
 } finally { Pop-Location }
 
-Write-Host "Installer: $Root\installer\output\AVT-C875-Follow-Source-Setup.exe"
+$ReleaseDir = "$Root\release"
+$ManualStage = "$Root\installer\output\manual-stage"
+$ManualZip = "$Root\installer\output\AVT-C875-Follow-Source-manual.zip"
+New-Item -ItemType Directory -Force -Path $ReleaseDir | Out-Null
+if (Test-Path $ManualStage) { Remove-Item -LiteralPath $ManualStage -Recurse -Force }
+New-Item -ItemType Directory -Force -Path "$ManualStage\obs-plugin\bin\64bit", "$ManualStage\obs-plugin\data\locale", "$ManualStage\hook" | Out-Null
+Copy-Item "$ObsBin\c875-follow-source.dll" "$ManualStage\obs-plugin\bin\64bit" -Force
+Copy-Item "$ObsData\*.ini" "$ManualStage\obs-plugin\data\locale" -Force
+Copy-Item "$HookBin\recentral_share_hook.dll", "$HookBin\recentral_share_injector.exe" "$ManualStage\obs-plugin\data" -Force
+Copy-Item "$HookBin\recentral_share_hook.dll", "$HookBin\recentral_share_injector.exe" "$ManualStage\hook" -Force
+Copy-Item "$Root\installer\Enable-RECentral-TS-Sharing.cmd" "$ManualStage\hook" -Force
+Copy-Item "$Root\README.md", "$Root\LICENSE", "$Root\THIRD_PARTY_NOTICES.md" $ManualStage -Force
+if (Test-Path $ManualZip) { Remove-Item -LiteralPath $ManualZip -Force }
+Compress-Archive -Path "$ManualStage\*" -DestinationPath $ManualZip -CompressionLevel Optimal
+Remove-Item -LiteralPath $ManualStage -Recurse -Force
+
+$Installer = "$Root\installer\output\AVT-C875-Follow-Source-Setup.exe"
+Copy-Item $Installer, $ManualZip $ReleaseDir -Force
+Write-Host "Installer: $Installer"
+Write-Host "Manual ZIP: $ManualZip"
